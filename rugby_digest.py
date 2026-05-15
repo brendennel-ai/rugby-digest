@@ -119,9 +119,10 @@ def send_email(html_body, plain_body):
     req = urllib.request.Request(
         "https://api.resend.com/emails",
         data=payload,
-        headers={
+                headers={
             "Authorization": f"Bearer {os.environ['RESEND_API_KEY']}",
             "Content-Type": "application/json",
+            "User-Agent": "rugby-digest/1.0",
         },
     )
     try:
