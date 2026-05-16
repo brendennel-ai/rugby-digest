@@ -6,7 +6,7 @@ import urllib.parse
 import anthropic
 from datetime import datetime, timezone
 
-BEARER_TOKEN = os.environ["TWITTER_BEARER_TOKEN"]
+BEARER_TOKEN = os.environ["TWITTER_BEARER_TOKEN"].strip()
 
 SA_TEAMS = ["Springboks","BlueBullsRugby","LionsRugbyCo","SharksRugby","TheStormers"]
 INTERNATIONAL_TEAMS = ["AllBlacks","WallabiesRugby","EnglandRugby","FranceRugby","IrishRugby","WalesRugby","ScotlandRugby","ArgentinaRugby","FijiRugby","manusamoa","PortugalRugby","TongaRugby","JRFURugby","WorldRugby","WorldRugby7s"]
