@@ -1,104 +1,197 @@
 #!/usr/bin/env python3
+"""Rugby Social Digest — pulls official team RSS + YouTube feeds, ranks with Claude, emails via Gmail."""
+
 import os
 import json
-import urllib.request
-import urllib.parse
+import smtplib
+import ssl
+import feedparser
 import anthropic
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
-BEARER_TOKEN = os.environ["TWITTER_BEARER_TOKEN"].strip()
+# ---------------------------------------------------------------------------
+# TEAM WEBSITE RSS FEEDS
+# ---------------------------------------------------------------------------
+WEBSITE_FEEDS = [
+    # South Africa
+    ("Springboks / SA Rugby",   "https://www.springboks.rugby/en/news-media/news/rss"),
+    ("Bulls",                   "https://bullsrugby.co.za/feed"),
+    ("Lions",                   "https://lionsrugby.co.za/feed"),
+    ("Sharks",                  "https://sharksrugby.co.za/feed"),
+    ("Stormers",                "https://stormers.co.za/feed"),
+    # International
+    ("All Blacks",              "https://www.allblacks.com/news/rss"),
+    ("Ireland Rugby",           "https://www.irishrugby.ie/feed"),
+    ("Wales Rugby",             "https://www.wru.wales/feed"),
+    ("Scotland Rugby",          "https://scottishrugby.org/news-and-features/feed"),
+    ("Argentina Rugby",         "https://www.uar.com.ar/feed"),
+    ("Japan Rugby",             "https://en.rugby-japan.jp/feed"),
+    ("Tonga Rugby",             "https://www.tonga-rugby-union.com/feed"),
+    # URC clubs
+    ("Leinster Rugby",          "https://www.leinsterrugby.ie/feed"),
+    ("Munster Rugby",           "https://www.munsterrugby.ie/feed"),
+    ("Scarlets",                "https://www.scarlets.wales/feed"),
+    ("Edinburgh Rugby",         "https://edinburghrugby.org/news-and-features/feed"),
+    ("Benetton Rugby",          "https://benettonrugby.it/feed"),
+    # English Premiership
+    ("Bristol Bears",           "https://www.bristolbearsrugby.com/feed"),
+    ("Sale Sharks",             "https://www.salesharks.com/feed"),
+    ("Saracens",                "https://saracens.com/feed"),
+]
 
-SA_TEAMS = ["Springboks","BlueBullsRugby","LionsRugbyCo","SharksRugby","TheStormers"]
-INTERNATIONAL_TEAMS = ["AllBlacks","WallabiesRugby","EnglandRugby","FranceRugby","IrishRugby","WalesRugby","ScotlandRugby","ArgentinaRugby","FijiRugby","manusamoa","PortugalRugby","TongaRugby","JRFURugby","WorldRugby","WorldRugby7s"]
-URC_CLUBS = ["LeinsterRugby","MunsterRugby","UlsterRugby","connachtrugby","Cardiff_Rugby","dragonsrugby","ospreys","scarlets_rugby","EdinburghRugby","GlasgowWarriors","BenettonRugby","ZebreParma","BlueBullsRugby","LionsRugbyCo","SharksRugby","TheStormers"]
-PREMIERSHIP_CLUBS = ["bathrugby","BristolBears","ExeterChiefs","gloucesterrugby","Harlequins","LeicesterTigers","FalconsRugby","SaintsRugby","SaleSharksMC","Saracens"]
-ALL_ACCOUNTS = list(dict.fromkeys(SA_TEAMS + INTERNATIONAL_TEAMS + URC_CLUBS + PREMIERSHIP_CLUBS))
-MAX_TWEETS_PER_ACCOUNT = 5
+# ---------------------------------------------------------------------------
+# YOUTUBE CHANNEL RSS FEEDS  (free, no API key needed)
+# Format: https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID
+# ---------------------------------------------------------------------------
+YOUTUBE_CHANNELS = [
+    # South Africa
+    ("Springboks (BOKTube)",    "UCVI5iqtQOsWZwtAg1o3SIAQ"),
+    ("Bulls",                   "UCVdKlS9V0bEyNhDLMnTbvRQ"),
+    ("Lions",                   "UCSBzEX42vrPJf-M_eG5XqNA"),
+    ("Sharks",                  "UCQoL3-RCoHqjnzFQejXW0Ng"),
+    ("Stormers",                "UC5rPh4GAcmJ84vhfgRTQC3w"),
+    # International
+    ("All Blacks",              "UCsAPiUMyBjtKamxYGbSUnLA"),
+    ("Wallabies",               "UC4Y6lpmGz2rkbOVdrOhjgvQ"),
+    ("England Rugby",           "UCmi7CahP3G3YySOAFOfSnkw"),
+    ("France Rugby",            "UCnH0bSmQqDBfNj9kZzCaINw"),
+    ("Ireland Rugby",           "UCn64VUStxkPK06ApqvV_MPA"),
+    ("Wales Rugby",             "UCWgLnh6sTHoMnPV6HfGNNfg"),
+    ("Scotland Rugby",          "UCycrxh2r7VKKxP-rfa9-cfw"),
+    ("Argentina Rugby",         "UCZRmjDMDqGqZckJJf6TGVDQ"),
+    ("Fiji Rugby",              "UCQoL3-RCoHqjnzFQejXW0Ng"),
+    ("Samoa Rugby",             "UCLb5PHKR3DpWjGjq2kFTv1A"),
+    ("Japan Rugby",             "UCl2rFpBWUUbBW0TKFR6I2Vg"),
+    ("World Rugby",             "UCE28rwYoaV7jvU6GVzdu_GQ"),
+    ("World Rugby Sevens",      "UCmfjIMUteXwYkolTAtALE9g"),
+    # URC
+    ("Leinster Rugby",          "UCGHjF23GPeIy1eyyBL8Ow2w"),
+    ("Munster Rugby",           "UC7991AZNku42o3Y36kUZOJA"),
+    ("Ulster Rugby",            "UC4EvohuiwgkUV1v03DDD4eQ"),
+    ("Connacht Rugby",          "UCgucukpMfuXvCtG9oELpN1Q"),
+    ("Cardiff Rugby",           "UCrVT1pOPraNiimvksjsOgVw"),
+    ("Dragons",                 "UCdB_8F9Yqur14jXdSzxyQeA"),
+    ("Ospreys",                 "UCJZmXODDzozHonpt08Bok1Q"),
+    ("Scarlets",                "UCSpQ51CzUYp_ambKRD7fDCg"),
+    ("Edinburgh Rugby",         "UCkyiKiVVlhOTvnYuWMIUgpQ"),
+    ("Glasgow Warriors",        "UCBUbMDPGBuHqQlFfHPgqxbw"),
+    ("Benetton Rugby",          "UCYLzZ0xgRhRuXXkRkR8gm2w"),
+    ("Zebre Parma",             "UC1YlrNry_KQH05fOwROh4_Q"),
+    # Premiership
+    ("Bath Rugby",              "UCIY0cK57uX_-xm0JUHK3zng"),
+    ("Bristol Bears",           "UCySyyTJVcxELIeW83Nmmpjw"),
+    ("Exeter Chiefs",           "UCb6NHMYnJE_8UeXKsVDVCEQ"),
+    ("Gloucester Rugby",        "UCQCFhiZXUVFUUib0VWe7OuQ"),
+    ("Harlequins",              "UC3QXCKORgVOEdKzaxgpzSVg"),
+    ("Leicester Tigers",        "UCy3Y-NTbA8DeLzzjw4tRUQA"),
+    ("Newcastle Falcons",       "UCCqKNRP-2qIwRh_X7AxDe0Q"),
+    ("Northampton Saints",      "UCblNEjRDcaD_8B0pOaJrnog"),
+    ("Sale Sharks",             "UC_k3xuhlC_jBgfpJdMqAKxw"),
+    ("Saracens",                "UCqhNRDAutbLhJyGfHtFrYmg"),
+]
 
-def twitter_request(url):
-    import requests
-    try:
-        resp = requests.get(url, headers={"Authorization": f"Bearer {BEARER_TOKEN}"})
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        print(f"Error fetching {url}: {e}")
-        return None
+MAX_ITEMS = 5
 
-def get_user_ids(usernames):
-    user_map = {}
-    for i in range(0, len(usernames), 100):
-        batch = usernames[i:i+100]
-        params = urllib.parse.urlencode({"usernames": ",".join(batch), "user.fields": "id,name,username"})
-        data = twitter_request(f"https://api.twitter.com/2/users/by?{params}")
-        if data and "data" in data:
-            for user in data["data"]:
-                user_map[user["username"].lower()] = user
-    return user_map
 
-def get_tweets_for_user(user_id, username):
-    params = urllib.parse.urlencode({"max_results": MAX_TWEETS_PER_ACCOUNT, "exclude": "replies,retweets", "tweet.fields": "created_at,public_metrics,text"})
-    data = twitter_request(f"https://api.twitter.com/2/users/{user_id}/tweets?{params}")
-    tweets = []
-    if data and "data" in data:
-        for t in data["data"]:
-            metrics = t.get("public_metrics", {})
-            tweets.append({"username": username, "tweet_id": t["id"], "text": t["text"], "created_at": t.get("created_at", ""), "likes": metrics.get("like_count", 0), "retweets": metrics.get("retweet_count", 0), "url": f"https://twitter.com/{username}/status/{t['id']}"})
-    return tweets
+def fetch_website_feeds():
+    items = []
+    for team, url in WEBSITE_FEEDS:
+        try:
+            feed = feedparser.parse(url)
+            for entry in feed.entries[:MAX_ITEMS]:
+                title = entry.get("title", "").strip()
+                link = entry.get("link", "").strip()
+                summary = entry.get("summary", entry.get("description", "")).strip()[:250]
+                if title and link:
+                    items.append({"type": "article", "team": team, "title": title, "link": link, "summary": summary})
+        except Exception as e:
+            print(f"Warning: {team} website feed failed: {e}")
+    return items
 
-def fetch_all_tweets(user_map):
-    all_tweets = {"sa": [], "international": [], "urc": [], "premiership": []}
-    seen = set()
-    def fetch(handles, key):
-        for h in handles:
-            if h.lower() in seen: continue
-            user = user_map.get(h.lower())
-            if not user: print(f"Warning: could not find @{h}"); continue
-            all_tweets[key].extend(get_tweets_for_user(user["id"], user["username"]))
-            seen.add(h.lower())
-    fetch(SA_TEAMS, "sa")
-    fetch(INTERNATIONAL_TEAMS, "international")
-    fetch([h for h in URC_CLUBS if h.lower() not in seen], "urc")
-    fetch([h for h in PREMIERSHIP_CLUBS if h.lower() not in seen], "premiership")
-    return all_tweets
 
-def format_tweets_for_prompt(all_tweets):
-    lines = []
-    for group, label in [("sa","SOUTH AFRICA"),("international","INTERNATIONAL"),("urc","URC CLUBS"),("premiership","PREMIERSHIP CLUBS")]:
-        lines.append(f"\n=== {label} ===")
-        for t in all_tweets[group]:
-            lines.append(f"@{t['username']} | Likes:{t['likes']} RT:{t['retweets']} | {t['created_at'][:10] if t['created_at'] else 'today'}\n{t['text']}\nURL: {t['url']}")
-    return "\n\n".join(lines)
+def fetch_youtube_feeds():
+    items = []
+    for team, channel_id in YOUTUBE_CHANNELS:
+        url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+        try:
+            feed = feedparser.parse(url)
+            for entry in feed.entries[:3]:
+                title = entry.get("title", "").strip()
+                link = entry.get("link", "").strip()
+                if title and link:
+                    items.append({"type": "video", "team": team, "title": title, "link": link, "summary": ""})
+        except Exception as e:
+            print(f"Warning: {team} YouTube feed failed: {e}")
+    return items
 
-def rank_and_format(all_tweets):
+
+def categorise(team_name):
+    sa = ["Springboks", "Bulls", "Lions", "Sharks", "Stormers", "SA Rugby"]
+    intl = ["All Blacks", "Wallabies", "England", "France", "Ireland", "Wales", "Scotland",
+            "Argentina", "Fiji", "Samoa", "Japan", "Tonga", "Portugal", "World Rugby",
+            "Sevens", "SVNS", "Pumas"]
+    for s in sa:
+        if s.lower() in team_name.lower():
+            return "sa"
+    for s in intl:
+        if s.lower() in team_name.lower():
+            return "international"
+    return "club"
+
+
+def rank_and_format(articles, videos):
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     today = datetime.now(timezone.utc).strftime("%A, %d %B %Y")
-    tweets_text = format_tweets_for_prompt(all_tweets)
+
+    articles_text = "\n\n".join(
+        f"[ARTICLE] TEAM: {a['team']} | CAT: {categorise(a['team']).upper()}\nTITLE: {a['title']}\nURL: {a['link']}\nSUMMARY: {a['summary']}"
+        for a in articles
+    )
+    videos_text = "\n\n".join(
+        f"[VIDEO] TEAM: {v['team']} | CAT: {categorise(v['team']).upper()}\nTITLE: {v['title']}\nURL: {v['link']}"
+        for v in videos
+    )
+
     prompt = f"""You are a rugby social media editor. Today is {today}.
 
-Below are recent tweets from official rugby team accounts grouped by tier.
-Curate and present the most interesting content as a daily social media digest email.
+Below is official content from rugby team websites and YouTube channels.
+Create a polished daily "Rugby Social Digest" email with these sections IN ORDER:
+
+1. 🇿🇦 South African Teams — articles + videos from SA teams, ranked by importance
+2. 🌍 International Teams — articles + videos from national teams, ranked by importance
+3. 🏉 Club Rugby — articles + videos from URC and Premiership clubs, ranked by importance
+4. 🎬 Must-Watch Videos — top 5-8 YouTube videos across all teams worth watching today
 
 Rules:
-- Prioritise: South African teams first, then international, then clubs
-- Within each group rank by importance (match news > announcements > training > general)
-- Pick a Trending & Funny section: highest engagement or most entertaining tweets regardless of tier
-- Skip pure promotional/sponsor posts unless newsworthy
+- Within each section rank by newsworthiness (match news > squad announcements > training > general)
+- For articles: show team name bold, hyperlinked headline, 1-sentence summary (your words, max 20 words)
+- For videos: show team name bold, hyperlinked video title, emoji 🎬, brief note on what it is
+- Skip duplicate stories (same news from multiple sources — keep best version)
+- Must-Watch Videos section: pick the most interesting/exciting video titles regardless of section
 
 Output a complete HTML email body (no html/head/body tags):
 - Outer wrapper: <div style="font-family: Georgia, serif; max-width: 680px; margin: 0 auto; color: #1a1a1a; line-height: 1.6;">
 - Header: today's date + "Rugby Social Digest" in dark blue (#1a2e4d), bold, 28px
-- Sections in order: 1) South African Teams 2) International Teams 3) Club Rugby (URC & Premiership) 4) Trending & Funny
-- Each section: bold heading with border-bottom: 2px solid #e8e8e8
-- Each tweet: @handle bold, hyperlinked tweet, engagement stats in grey, 1-sentence summary
+- Each section heading: bold, font-size 18px, border-bottom: 2px solid #e8e8e8, padding-bottom: 4px, margin-top: 28px
+- Team name in bold dark green (#1a4d2e) before each item
 - Footer in grey: "Delivered daily by Rugby Social Digest Agent"
 
 Then output exactly: ---PLAINTEXT---
-Followed by plain-text version.
+Followed by a plain-text version with the same content.
 
-TWEETS:
-{tweets_text}"""
-    msg = client.messages.create(model="claude-opus-4-7", max_tokens=4096, messages=[{"role": "user", "content": prompt}])
+ARTICLES:
+{articles_text}
+
+VIDEOS:
+{videos_text}"""
+
+    msg = client.messages.create(
+        model="claude-opus-4-7",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": prompt}],
+    )
     full = msg.content[0].text
     if "---PLAINTEXT---" in full:
         html, plain = full.split("---PLAINTEXT---", 1)
@@ -106,19 +199,19 @@ TWEETS:
         html, plain = full, full
     return html.strip(), plain.strip()
 
+
 def send_email(html_body, plain_body):
-    import smtplib, ssl
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
     today = datetime.now(timezone.utc).strftime("%d %b %Y")
     sender = "brendennel@gmail.com"
     password = os.environ["GMAIL_APP_PASSWORD"]
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Rugby Social Digest — {today}"
     msg["From"] = f"Rugby Social Digest <{sender}>"
     msg["To"] = sender
     msg.attach(MIMEText(plain_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
+
     ctx = ssl.create_default_context()
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
         server.ehlo()
@@ -127,22 +220,27 @@ def send_email(html_body, plain_body):
         server.sendmail(sender, sender, msg.as_string())
     print("Email sent successfully.")
 
+
 def main():
-    print("Resolving Twitter usernames...")
-    user_map = get_user_ids(ALL_ACCOUNTS)
-    print(f"Resolved {len(user_map)} accounts.")
-    print("Fetching tweets...")
-    all_tweets = fetch_all_tweets(user_map)
-    total = sum(len(v) for v in all_tweets.values())
-    print(f"Fetched {total} tweets total.")
-    if total == 0:
-        print("No tweets found — aborting.")
+    print("Fetching team website feeds...")
+    articles = fetch_website_feeds()
+    print(f"Got {len(articles)} articles from {len(WEBSITE_FEEDS)} feeds.")
+
+    print("Fetching YouTube feeds...")
+    videos = fetch_youtube_feeds()
+    print(f"Got {len(videos)} videos from {len(YOUTUBE_CHANNELS)} channels.")
+
+    if not articles and not videos:
+        print("No content found — aborting.")
         return
+
     print("Ranking and formatting with Claude...")
-    html_body, plain_body = rank_and_format(all_tweets)
+    html_body, plain_body = rank_and_format(articles, videos)
+
     print("Sending email...")
     send_email(html_body, plain_body)
     print("Done.")
+
 
 if __name__ == "__main__":
     main()
