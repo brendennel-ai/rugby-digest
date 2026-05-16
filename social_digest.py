@@ -6,8 +6,7 @@ import urllib.parse
 import anthropic
 from datetime import datetime, timezone
 
-import urllib.parse
-BEARER_TOKEN = urllib.parse.unquote(os.environ["TWITTER_BEARER_TOKEN"])
+BEARER_TOKEN = os.environ["TWITTER_BEARER_TOKEN"]
 
 SA_TEAMS = ["Springboks","BlueBullsRugby","LionsRugbyCo","SharksRugby","TheStormers"]
 INTERNATIONAL_TEAMS = ["AllBlacks","WallabiesRugby","EnglandRugby","FranceRugby","IrishRugby","WalesRugby","ScotlandRugby","ArgentinaRugby","FijiRugby","manusamoa","PortugalRugby","TongaRugby","JRFURugby","WorldRugby","WorldRugby7s"]
@@ -17,12 +16,13 @@ ALL_ACCOUNTS = list(dict.fromkeys(SA_TEAMS + INTERNATIONAL_TEAMS + URC_CLUBS + P
 MAX_TWEETS_PER_ACCOUNT = 5
 
 def twitter_request(url):
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {BEARER_TOKEN}"})
+    import requests
     try:
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        print(f"HTTP error {e.code} for {url}: {e.read().decode()[:200]}")
+        resp = requests.get(url, headers={"Authorization": f"Bearer {BEARER_TOKEN}"})
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"Error fetching {url}: {e}")
         return None
 
 def get_user_ids(usernames):
