@@ -4,7 +4,26 @@ import json
 import urllib.request
 import feedparser
 import anthropic
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+SEEN_FILE = "seen_stories.json"
+SEEN_EXPIRY_DAYS = 30  # forget a URL after 30 days so truly recurring stories can return
+
+
+def load_seen() -> dict:
+    """Return {url: date_string} for all previously sent stories."""
+    if os.path.exists(SEEN_FILE):
+        with open(SEEN_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_seen(seen: dict) -> None:
+    """Persist seen URLs, dropping any older than SEEN_EXPIRY_DAYS."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=SEEN_EXPIRY_DAYS)).strftime("%Y-%m-%d")
+    pruned = {url: date for url, date in seen.items() if date >= cutoff}
+    with open(SEEN_FILE, "w") as f:
+        json.dump(pruned, f, indent=2, sort_keys=True)
 
 RSS_FEEDS = [
     # International
@@ -107,36 +126,44 @@ STORIES:
 
 
 def send_email(html_body, plain_body):
-    import smtplib, ssl
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-
     today = datetime.now(timezone.utc).strftime("%d %b %Y")
-    sender = "brendennel@gmail.com"
-    password = os.environ["GMAIL_APP_PASSWORD"]
+    payload = json.dumps({
+        "from": "Rugby Digest <onboarding@resend.dev>",
+        "to": ["brendennel@gmail.com"],
+        "subject": f"Rugby Daily Digest — {today}",
+        "html": html_body,
+        "text": plain_body,
+    }).encode()
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Rugby Daily Digest — {today}"
-    msg["From"] = f"Rugby Digest <{sender}>"
-    msg["To"] = sender
-    msg.attach(MIMEText(plain_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {os.environ['RESEND_API_KEY']}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read().decode())
+            print(f"Email sent successfully: {result}")
+    except urllib.error.HTTPError as e:
+        print(f"Resend API error {e.code}: {e.read().decode()}")
+        raise
 
-    ctx = ssl.create_default_context()
-    with smtplib.SMTP("smtp.gmail.com", 587) as server:
-        server.ehlo()
-        server.starttls(context=ctx)
-        server.login(sender, password)
-        server.sendmail(sender, sender, msg.as_string())
-    print("Email sent successfully.")
 
 def main():
     print("Fetching rugby stories...")
-    stories = fetch_stories()
-    print(f"Fetched {len(stories)} stories from {len(RSS_FEEDS)} feeds.")
+    all_stories = fetch_stories()
+    print(f"Fetched {len(all_stories)} stories from {len(RSS_FEEDS)} feeds.")
+
+    seen = load_seen()
+    stories = [s for s in all_stories if s["link"] not in seen]
+    skipped = len(all_stories) - len(stories)
+    print(f"Filtered out {skipped} already-seen stories — {len(stories)} new stories remaining.")
 
     if not stories:
-        print("No stories found — aborting.")
+        print("No new stories found — aborting.")
         return
 
     print("Ranking and formatting with Claude...")
@@ -144,6 +171,13 @@ def main():
 
     print("Sending email via Resend...")
     send_email(html_body, plain_body)
+
+    # Mark every new story as seen so it won't appear in future digests
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for s in stories:
+        seen[s["link"]] = today
+    save_seen(seen)
+    print(f"Saved {len(stories)} new URLs to {SEEN_FILE}.")
     print("Done.")
 
 
