@@ -1,20 +1,38 @@
 name: Rugby Social Digest
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # triggered by cron-job.org
+
+permissions:
+  contents: write      # needed to push seen_stories.json back to the repo
 
 jobs:
   send-digest:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
       - name: Run social digest
         env:
           TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python social_digest.py
+
+      - name: Save seen stories
+        run: |
+          git config user.name "Rugby Digest Bot"
+          git config user.email "action@github.com"
+          git add seen_stories.json
+          git diff --cached --quiet || git commit -m "chore: update seen stories [skip ci]"
+          git push
