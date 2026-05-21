@@ -1,7 +1,13 @@
 name: Rugby Daily Digest
 
 on:
-  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'   # 4am UTC = 6am CAT every day
+  workflow_dispatch:        # lets you trigger manually from GitHub UI
+
+permissions:
+  contents: write           # needed to push seen_stories.json back to the repo
+
 jobs:
   send-digest:
     runs-on: ubuntu-latest
@@ -22,5 +28,12 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python rugby_digest.py
+
+      - name: Save seen stories
+        run: |
+          git config user.name "Rugby Digest Bot"
+          git config user.email "action@github.com"
+          git add seen_stories.json
+          git diff --cached --quiet || git commit -m "chore: update seen stories [skip ci]"
+          git push
