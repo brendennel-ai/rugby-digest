@@ -7,9 +7,28 @@ import smtplib
 import ssl
 import feedparser
 import anthropic
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+SEEN_FILE = "seen_stories.json"
+SEEN_EXPIRY_DAYS = 30  # forget a URL after 30 days so truly recurring content can return
+
+
+def load_seen() -> dict:
+    """Return {url: date_string} for all previously sent stories/videos."""
+    if os.path.exists(SEEN_FILE):
+        with open(SEEN_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_seen(seen: dict) -> None:
+    """Persist seen URLs, dropping any older than SEEN_EXPIRY_DAYS."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=SEEN_EXPIRY_DAYS)).strftime("%Y-%m-%d")
+    pruned = {url: date for url, date in seen.items() if date >= cutoff}
+    with open(SEEN_FILE, "w") as f:
+        json.dump(pruned, f, indent=2, sort_keys=True)
 
 # ---------------------------------------------------------------------------
 # TEAM WEBSITE RSS FEEDS
@@ -223,15 +242,21 @@ def send_email(html_body, plain_body):
 
 def main():
     print("Fetching team website feeds...")
-    articles = fetch_website_feeds()
-    print(f"Got {len(articles)} articles from {len(WEBSITE_FEEDS)} feeds.")
+    all_articles = fetch_website_feeds()
+    print(f"Got {len(all_articles)} articles from {len(WEBSITE_FEEDS)} feeds.")
 
     print("Fetching YouTube feeds...")
-    videos = fetch_youtube_feeds()
-    print(f"Got {len(videos)} videos from {len(YOUTUBE_CHANNELS)} channels.")
+    all_videos = fetch_youtube_feeds()
+    print(f"Got {len(all_videos)} videos from {len(YOUTUBE_CHANNELS)} channels.")
+
+    seen = load_seen()
+    articles = [a for a in all_articles if a["link"] not in seen]
+    videos   = [v for v in all_videos   if v["link"] not in seen]
+    print(f"Filtered out {len(all_articles) - len(articles)} already-seen articles "
+          f"and {len(all_videos) - len(videos)} already-seen videos.")
 
     if not articles and not videos:
-        print("No content found — aborting.")
+        print("No new content found — aborting.")
         return
 
     print("Ranking and formatting with Claude...")
@@ -239,6 +264,13 @@ def main():
 
     print("Sending email...")
     send_email(html_body, plain_body)
+
+    # Mark every new item as seen so it won't appear in future digests
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for item in articles + videos:
+        seen[item["link"]] = today
+    save_seen(seen)
+    print(f"Saved {len(articles) + len(videos)} new URLs to {SEEN_FILE}.")
     print("Done.")
 
 
