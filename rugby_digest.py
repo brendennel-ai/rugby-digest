@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import os
 import json
+import smtplib
 import urllib.request
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 import feedparser
 import anthropic
 from datetime import datetime, timezone, timedelta
@@ -127,29 +130,20 @@ STORIES:
 
 def send_email(html_body, plain_body):
     today = datetime.now(timezone.utc).strftime("%d %b %Y")
-    payload = json.dumps({
-        "from": "Rugby Digest <onboarding@resend.dev>",
-        "to": ["brendennel@gmail.com"],
-        "subject": f"Rugby Daily Digest — {today}",
-        "html": html_body,
-        "text": plain_body,
-    }).encode()
+    sender = "brendennel@gmail.com"
+    recipient = "brendennel@gmail.com"
 
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {os.environ['RESEND_API_KEY']}",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req) as resp:
-            result = json.loads(resp.read().decode())
-            print(f"Email sent successfully: {result}")
-    except urllib.error.HTTPError as e:
-        print(f"Resend API error {e.code}: {e.read().decode()}")
-        raise
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"Rugby Digest <{sender}>"
+    msg["To"] = recipient
+    msg["Subject"] = f"Rugby Daily Digest — {today}"
+    msg.attach(MIMEText(plain_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(sender, os.environ["GMAIL_APP_PASSWORD"])
+        server.sendmail(sender, [recipient], msg.as_string())
+    print("Email sent successfully via Gmail.")
 
 
 def main():
