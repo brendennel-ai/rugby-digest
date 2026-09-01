@@ -9,6 +9,8 @@ import feedparser
 import anthropic
 from datetime import datetime, timezone, timedelta
 
+from page_render import write_page
+
 SEEN_FILE = "seen_stories.json"
 SEEN_EXPIRY_DAYS = 30  # forget a URL after 30 days so truly recurring stories can return
 
@@ -162,6 +164,8 @@ def main():
 
     print("Ranking and formatting with Claude...")
     html_body, plain_body = rank_and_format(stories)
+
+    write_page(html_body, "daily")
 
     print("Sending email via Resend...")
     send_email(html_body, plain_body)

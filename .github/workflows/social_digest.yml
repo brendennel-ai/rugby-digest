@@ -29,10 +29,10 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python social_digest.py
 
-      - name: Save seen stories
+      - name: Save seen stories and digest page
         run: |
           git config user.name "Rugby Digest Bot"
           git config user.email "action@github.com"
-          git add seen_stories.json
-          git diff --cached --quiet || git commit -m "chore: update seen stories [skip ci]"
+          git add seen_stories.json docs/teams.html
+          git diff --cached --quiet || git commit -m "chore: update team news digest [skip ci]"
           git push

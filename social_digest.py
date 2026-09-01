@@ -11,6 +11,8 @@ from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from page_render import write_page
+
 SEEN_FILE = "seen_stories.json"
 SEEN_EXPIRY_DAYS = 30  # forget a URL after 30 days so truly recurring content can return
 
@@ -261,6 +263,8 @@ def main():
 
     print("Ranking and formatting with Claude...")
     html_body, plain_body = rank_and_format(articles, videos)
+
+    write_page(html_body, "teams")
 
     print("Sending email...")
     send_email(html_body, plain_body)
