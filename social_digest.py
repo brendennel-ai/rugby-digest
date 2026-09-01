@@ -207,8 +207,8 @@ VIDEOS:
 {videos_text}"""
 
     msg = client.messages.create(
-        model="claude-opus-4-7",
-        max_tokens=4096,
+        model="claude-sonnet-5",
+        max_tokens=8192,
         messages=[{"role": "user", "content": prompt}],
     )
     full = msg.content[0].text
