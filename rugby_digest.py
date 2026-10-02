@@ -122,7 +122,7 @@ STORIES:
         messages=[{"role": "user", "content": prompt}],
     )
 
-    full = msg.content[0].text
+    full = "".join(b.text for b in msg.content if b.type == "text")
     if "---PLAINTEXT---" in full:
         html, plain = full.split("---PLAINTEXT---", 1)
     else:
